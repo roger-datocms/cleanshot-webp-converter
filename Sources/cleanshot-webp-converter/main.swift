@@ -12,14 +12,21 @@ func log(_ message: String) {
     fflush(stdout)
 }
 
+/// Last handled version per path. FSEvents reports several events per save, and this collapses them.
+/// Only touched on `workQueue`.
+nonisolated(unsafe) var handledVersions: [String: FileVersion] = [:]
+
 /// Runs the conversion pipeline for one file, logs the outcome, and shows a toast next to CleanShot's overlay.
+/// Runs on `workQueue`.
 func handle(_ url: URL, isOverlayOnLeftEdge: Bool) {
     let name = url.lastPathComponent
+    guard let version = FileVersion(of: url), handledVersions[url.path] != version else { return }
+    defer { handledVersions[url.path] = FileVersion(of: url) }
     do {
         let (result, candidates) = try processScreenshot(at: url, pasteboard: .general, jpegQuality: jpegQuality)
         let sizes = candidates.map { "\($0.fileExtension)=\($0.data.count)B" }.joined(separator: ", ")
         switch result {
-        case .notNew: break
+        case .notRecent: break
         case .notOnClipboard: log("\(name): not on clipboard, skipping")
         case .encodingFailed: log("\(name): encoding failed")
         case .savedOnly(let output): log("\(name): \(sizes) -> \(output.lastPathComponent) (clipboard changed, left alone)")
@@ -56,12 +63,46 @@ final class DefaultsObserver: NSObject {
     }
 }
 
-/// Owns the directory watch and re-points it whenever CleanShot's settings change.
+/// Delivers file-level FSEvents (creations, in-place edits, renames) under one directory to a closure on the main queue.
+final class FileEventStream {
+    private var stream: FSEventStreamRef?
+    private let onEvent: (String) -> Void
+
+    init?(directory: URL, onEvent: @escaping (String) -> Void) {
+        self.onEvent = onEvent
+        var context = FSEventStreamContext(
+            version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil
+        )
+        let callback: FSEventStreamCallback = { _, info, count, paths, flags, _ in
+            let events = Unmanaged<FileEventStream>.fromOpaque(info!).takeUnretainedValue()
+            let paths = unsafeBitCast(paths, to: NSArray.self) as! [String]
+            for index in 0..<count where flags[index] & FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsFile) != 0 {
+                events.onEvent(paths[index])
+            }
+        }
+        let flags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagNoDefer
+        guard let stream = FSEventStreamCreate(
+            nil, callback, &context, [directory.path] as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.1, FSEventStreamCreateFlags(flags)
+        ) else { return nil }
+        self.stream = stream
+        FSEventStreamSetDispatchQueue(stream, .main)
+        FSEventStreamStart(stream)
+    }
+
+    deinit {
+        guard let stream else { return }
+        FSEventStreamStop(stream)
+        FSEventStreamInvalidate(stream)
+        FSEventStreamRelease(stream)
+    }
+}
+
+/// Owns the folder watch and re-points it whenever CleanShot's settings change.
 @MainActor
 final class ExportFolderWatcher {
     private var settings: CleanShotSettings?
-    private var source: DispatchSourceFileSystemObject?
-    private var knownNames: Set<String> = []
+    private var events: FileEventStream?
 
     func apply(_ newSettings: CleanShotSettings) {
         guard newSettings != settings else { return }
@@ -73,38 +114,24 @@ final class ExportFolderWatcher {
     }
 
     private func watch(_ directory: URL) {
-        source?.cancel()
-        source = nil
-        let descriptor = open(directory.path, O_EVTONLY)
-        guard descriptor >= 0 else {
-            log("cannot watch \(directory.path): \(String(cString: strerror(errno)))")
-            return
+        events = FileEventStream(directory: directory) { [weak self] path in
+            MainActor.assumeIsolated { self?.fileChanged(path) }
         }
-        knownNames = webpNames(in: directory)
-        // A directory vnode fires on any entry change; diffing the listing tells us which WebPs are new.
-        let newSource = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: .write, queue: .main)
-        newSource.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.scan() } }
-        newSource.setCancelHandler { close(descriptor) }
-        newSource.resume()
-        source = newSource
+        if events == nil { log("cannot watch \(directory.path)") }
     }
 
-    private func scan() {
-        guard let settings else { return }
-        let currentNames = webpNames(in: settings.exportDirectory)
-        let newNames = currentNames.subtracting(knownNames)
-        knownNames = currentNames
-        guard settings.savesWebP else { return }
-        for name in newNames where settings.matchesName(name) {
-            let url = settings.exportDirectory.appendingPathComponent(name)
-            let isOverlayOnLeftEdge = settings.isOverlayOnLeftEdge
-            workQueue.async { handle(url, isOverlayOnLeftEdge: isOverlayOnLeftEdge) }
-        }
-    }
-
-    private func webpNames(in directory: URL) -> Set<String> {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        return Set(names.filter { $0.lowercased().hasSuffix(".webp") })
+    private func fileChanged(_ path: String) {
+        guard let settings, settings.savesWebP else { return }
+        let changedURL = URL(fileURLWithPath: path)
+        // FSEvents reports real paths (e.g. /private/tmp), CleanShot's setting may use a symlinked one.
+        guard changedURL.pathExtension.lowercased() == "webp",
+              changedURL.deletingLastPathComponent().resolvingSymlinksInPath() == settings.exportDirectory.resolvingSymlinksInPath(),
+              settings.matchesName(changedURL.lastPathComponent)
+        else { return }
+        // Use CleanShot's spelling of the folder, since that's what it puts on the clipboard.
+        let url = settings.exportDirectory.appendingPathComponent(changedURL.lastPathComponent)
+        let isOverlayOnLeftEdge = settings.isOverlayOnLeftEdge
+        workQueue.async { handle(url, isOverlayOnLeftEdge: isOverlayOnLeftEdge) }
     }
 }
 

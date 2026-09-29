@@ -1,6 +1,6 @@
 # cleanshot-webp-converter
 
-[CleanShot X](https://cleanshot.com) can save screenshots as WebP, which is small but not accepted everywhere (some GitHub editors, for example). This tiny macOS agent watches for new CleanShot WebP captures and:
+[CleanShot X](https://cleanshot.com) can save screenshots as WebP, which is small but not accepted everywhere (some GitHub editors, for example). This tiny macOS agent watches for new or edited CleanShot WebP captures and:
 
 1. Re-encodes each capture as PNG and as JPEG (quality 85).
 2. Saves the smaller one next to the original. The WebP stays.
@@ -36,7 +36,7 @@ Logs: `tail -f ~/Library/Logs/cleanshot-webp-converter.log`
 CleanShot has no plugin or post-capture hook API; its [URL scheme](https://cleanshot.com/docs-api) only triggers captures. So the agent:
 
 1. Reads CleanShot's export folder, file format, and filename template from its preferences, and re-reads them whenever you change them in CleanShot.
-2. Watches the export folder for new `.webp` files whose names match the filename template.
+2. Watches the export folder (via FSEvents) for `.webp` files, new or re-saved after an Annotate edit, whose names match the filename template. An edit replaces the earlier conversion.
 3. Converts a file only if the clipboard points at that same file, i.e. CleanShot just copied it. WebPs you download or copy yourself stay untouched.
 
 The agent uses no CPU while idle and about 10 MB of memory.

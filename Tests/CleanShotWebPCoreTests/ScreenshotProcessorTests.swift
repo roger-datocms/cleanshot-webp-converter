@@ -67,15 +67,15 @@ struct Sandbox: ~Copyable {
         #expect(try FileManager.default.contentsOfDirectory(atPath: sandbox.directory.path) == [webp.lastPathComponent])
     }
 
-    @Test func ignoresOldFiles() throws {
+    @Test func ignoresFilesNotWrittenRecently() throws {
         let sandbox = try Sandbox()
         let webp = try sandbox.capture("photo")
-        try FileManager.default.setAttributes([.creationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: webp.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: webp.path)
         sandbox.copyToClipboard(webp)
 
         let (result, _) = try processScreenshot(at: webp, pasteboard: sandbox.pasteboard, timing: sandbox.timing)
 
-        #expect(result == .notNew)
+        #expect(result == .notRecent)
     }
 
     @Test func ignoresDeletedFiles() throws {
@@ -83,6 +83,52 @@ struct Sandbox: ~Copyable {
         let (result, _) = try processScreenshot(
             at: sandbox.directory.appendingPathComponent("gone.webp"), pasteboard: sandbox.pasteboard, timing: sandbox.timing
         )
-        #expect(result == .notNew)
+        #expect(result == .notRecent)
+    }
+
+    /// CleanShot's Annotate tool re-saves the same WebP in place and copies it again.
+    @Test func reconvertsAnEditedCaptureAndDropsTheStaleFormat() throws {
+        let sandbox = try Sandbox()
+        let webp = try sandbox.capture("photo")
+        sandbox.copyToClipboard(webp)
+        _ = try processScreenshot(at: webp, pasteboard: sandbox.pasteboard, timing: sandbox.timing)
+        let jpeg = webp.deletingPathExtension().appendingPathExtension("jpg")
+        #expect(FileManager.default.fileExists(atPath: jpeg.path))
+
+        // Overwrite in place (same inode and creation date), as an Annotate save does.
+        try FileManager.default.setAttributes([.creationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: webp.path)
+        try Data(contentsOf: fixtureURL("graphic")).write(to: webp)
+        sandbox.copyToClipboard(webp)
+        let (result, _) = try processScreenshot(at: webp, pasteboard: sandbox.pasteboard, timing: sandbox.timing)
+
+        let png = webp.deletingPathExtension().appendingPathExtension("png")
+        #expect(result == .savedAndCopied(png))
+        #expect(!FileManager.default.fileExists(atPath: jpeg.path), "the pre-edit JPEG is stale")
+        #expect(fileURLPath(on: sandbox.pasteboard) == png.standardizedFileURL.path)
+    }
+
+    @Test func keepsUnrelatedOlderSiblings() throws {
+        let sandbox = try Sandbox()
+        let olderPNG = sandbox.directory.appendingPathComponent("2026-09-28 5-12-29 PM.png")
+        try Data("not ours".utf8).write(to: olderPNG)
+        try FileManager.default.setAttributes([.creationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: olderPNG.path)
+        let webp = try sandbox.capture("photo")
+        sandbox.copyToClipboard(webp)
+
+        let (result, _) = try processScreenshot(at: webp, pasteboard: sandbox.pasteboard, timing: sandbox.timing)
+
+        #expect(result == .savedAndCopied(webp.deletingPathExtension().appendingPathExtension("jpg")))
+        #expect(try Data(contentsOf: olderPNG) == Data("not ours".utf8))
+    }
+
+    @Test func fileVersionChangesWhenEdited() throws {
+        let sandbox = try Sandbox()
+        let webp = try sandbox.capture("photo")
+        let original = try #require(FileVersion(of: webp))
+        #expect(FileVersion(of: webp) == original)
+
+        try Data(contentsOf: fixtureURL("graphic")).write(to: webp)
+        #expect(FileVersion(of: webp) != original)
+        #expect(FileVersion(of: sandbox.directory.appendingPathComponent("missing.webp")) == nil)
     }
 }
