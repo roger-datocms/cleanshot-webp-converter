@@ -125,18 +125,59 @@ struct Sandbox: ~Copyable {
         #expect(sandbox.pasteboard.data(forType: .init(UTType.jpeg.identifier)) == candidates[0].data)
     }
 
-    @Test func historyRecopyIgnoresConversionOlderThanAnEdit() throws {
+    @Test func historyRecopyIgnoresConversionThatNoLongerMatches() throws {
         let sandbox = try Sandbox()
         let webp = try sandbox.capture("photo")
         let jpeg = webp.deletingPathExtension().appendingPathExtension("jpg")
         try Data("pre-edit".utf8).write(to: jpeg)
-        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -7200)], ofItemAtPath: jpeg.path)
         try sandbox.age(webp)
 
         let (result, _) = try sandbox.process(webp, changeCount: sandbox.copyToClipboard(webp))
 
         #expect(result == .copiedDataOnly)
         #expect(try Data(contentsOf: jpeg) == Data("pre-edit".utf8), "left alone")
+    }
+
+    /// Matching is by content, so a conversion older than a no-op re-save of the WebP is still reused.
+    @Test func historyRecopyReusesMatchingConversionRegardlessOfTimestamps() throws {
+        let sandbox = try Sandbox()
+        let webp = try sandbox.capture("photo")
+        _ = try sandbox.process(webp, changeCount: sandbox.copyToClipboard(webp))
+        let jpeg = webp.deletingPathExtension().appendingPathExtension("jpg")
+        try sandbox.age(webp)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -7200)], ofItemAtPath: jpeg.path)
+
+        let (result, _) = try sandbox.process(webp, changeCount: sandbox.copyToClipboard(webp))
+
+        #expect(result == .copiedExisting(jpeg))
+    }
+
+    /// A re-save that encodes to identical bytes leaves the conversion on disk untouched.
+    @Test func identicalReencodeDoesNotRewriteTheFile() throws {
+        let sandbox = try Sandbox()
+        let webp = try sandbox.capture("photo")
+        _ = try sandbox.process(webp, changeCount: sandbox.copyToClipboard(webp))
+        let jpeg = webp.deletingPathExtension().appendingPathExtension("jpg")
+        try sandbox.age(jpeg)
+        let before = try FileManager.default.attributesOfItem(atPath: jpeg.path)
+
+        try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: webp.path)
+        let (result, _) = try sandbox.process(webp, changeCount: sandbox.copyToClipboard(webp))
+
+        let after = try FileManager.default.attributesOfItem(atPath: jpeg.path)
+        #expect(result == .savedAndCopied(jpeg))
+        #expect(after[.modificationDate] as? Date == before[.modificationDate] as? Date)
+        #expect(after[.systemFileNumber] as? Int == before[.systemFileNumber] as? Int, "same inode, so not replaced")
+    }
+
+    @Test func writeIfChangedSkipsIdenticalBytesOnly() throws {
+        let sandbox = try Sandbox()
+        let url = sandbox.exportDirectory.appendingPathComponent("out.png")
+        #expect(try writeIfChanged(Data([1, 2, 3]), to: url))
+        #expect(try !writeIfChanged(Data([1, 2, 3]), to: url))
+        #expect(try writeIfChanged(Data([1, 2, 4]), to: url), "same size, different bytes")
+        #expect(try writeIfChanged(Data([1, 2]), to: url), "different size")
+        #expect(try Data(contentsOf: url) == Data([1, 2]))
     }
 
     /// Even a brand-new file in CleanShot's history storage is never written next to.

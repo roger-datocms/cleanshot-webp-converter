@@ -40,7 +40,7 @@ func handleClipboardCopy(_ url: URL, changeCount: Int, settings: CleanShotSettin
         case .clipboardChanged: return log("\(name): clipboard changed meanwhile, left alone")
         case .encodingFailed: return log("\(name): encoding failed")
         case .savedAndCopied(let output):
-            log("\(name): \(sizes) -> \(output.lastPathComponent), saved and copied")
+            log("\(name): \(sizes) -> \(output.lastPathComponent) on disk, copied")
             convertedVersions[url.path] = FileVersion(of: url)
             isRecopy = false
         case .copiedExisting(let output):
@@ -66,7 +66,7 @@ func handleSavedFile(_ url: URL, settings: CleanShotSettings) {
         )
         guard case .savedOnly(let output) = result else { return }
         convertedVersions[url.path] = version
-        log("\(name): \(candidates.map { "\($0.fileExtension)=\($0.data.count)B" }.joined(separator: ", ")) -> \(output.lastPathComponent), saved (not copied)")
+        log("\(name): \(candidates.map { "\($0.fileExtension)=\($0.data.count)B" }.joined(separator: ", ")) -> \(output.lastPathComponent) on disk (not copied)")
         announce(url, result: candidates[0], isRecopy: false, settings: settings)
     } catch {
         log("\(name): \(error.localizedDescription)")

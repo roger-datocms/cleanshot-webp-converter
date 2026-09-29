@@ -105,12 +105,12 @@ public func processClipboardCopy(
     let outputURL = url.deletingPathExtension().appendingPathExtension(smallest.fileExtension)
 
     if isInExportFolder && Date().timeIntervalSince(modified) < timing.freshSaveAge {
-        try smallest.data.write(to: outputURL, options: .atomic)
+        try writeIfChanged(smallest.data, to: outputURL)
         removeStaleConversions(of: url, keeping: outputURL)
         writeImage(smallest, at: outputURL, to: pasteboard)
         return (.savedAndCopied(outputURL), candidates)
     }
-    if isInExportFolder, isUpToDateConversion(outputURL, of: modified) {
+    if isInExportFolder, hasContents(outputURL, smallest.data) {
         writeImage(smallest, at: outputURL, to: pasteboard)
         return (.copiedExisting(outputURL), candidates)
     }
@@ -143,7 +143,7 @@ public func processSavedFile(
     let candidates = encodeSmallestFirst(url, jpegQuality: jpegQuality)
     guard let smallest = candidates.first else { return (.encodingFailed, [], version) }
     let outputURL = url.deletingPathExtension().appendingPathExtension(smallest.fileExtension)
-    try smallest.data.write(to: outputURL, options: .atomic)
+    try writeIfChanged(smallest.data, to: outputURL)
     removeStaleConversions(of: url, keeping: outputURL)
     return (.savedOnly(outputURL), candidates, version)
 }
@@ -156,12 +156,6 @@ func poll(timeout: TimeInterval, interval: TimeInterval, _ check: () -> Bool) ->
         Thread.sleep(forTimeInterval: interval)
     } while Date() < deadline
     return false
-}
-
-/// Whether `conversion` exists and was written after the source's last save.
-func isUpToDateConversion(_ conversion: URL, of sourceModified: Date) -> Bool {
-    let modified = (try? FileManager.default.attributesOfItem(atPath: conversion.path))?[.modificationDate] as? Date
-    return modified.map { $0 >= sourceModified } ?? false
 }
 
 /// Deletes an earlier conversion in another format, e.g. the PNG made before an edit tipped the result to JPEG.
@@ -177,4 +171,20 @@ func removeStaleConversions(of url: URL, keeping outputURL: URL) {
         else { continue }
         try? fileManager.removeItem(at: sibling)
     }
+}
+
+/// Writes `data` to `url` unless the file already holds exactly those bytes, so a re-encode of an unchanged image
+/// doesn't touch the file, its timestamps, or the SSD. Returns whether it wrote.
+@discardableResult
+func writeIfChanged(_ data: Data, to url: URL) throws -> Bool {
+    if hasContents(url, data) { return false }
+    try data.write(to: url, options: .atomic)
+    return true
+}
+
+/// Whether the file at `url` holds exactly `data`. Compares sizes first, then bytes via a memory-mapped read.
+/// Also tells whether an existing conversion matches the current WebP, independent of timestamps.
+func hasContents(_ url: URL, _ data: Data) -> Bool {
+    let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int
+    return size == data.count && (try? Data(contentsOf: url, options: .alwaysMapped)) == data
 }

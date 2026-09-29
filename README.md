@@ -43,7 +43,7 @@ CleanShot has no plugin or post-capture hook API; its [URL scheme](https://clean
    Both share a record of converted file versions, so a capture that's saved and copied converts once.
 3. Acts only on a `.webp` in CleanShot's export folder or its history storage (`~/Library/Application Support/CleanShot/media`) whose name matches the filename template. The clipboard doesn't record which app copied a file, so location and name identify CleanShot's files. A WebP you download elsewhere stays untouched.
 4. For a copied WebP, picks what to do by how recently it was saved:
-   - **Fresh capture or Annotate edit** (saved in the last 30 seconds): saves the conversion next to it, replacing an earlier one, and copies that file.
+   - **Fresh capture or Annotate edit** (saved in the last 30 seconds): saves the conversion next to it, replacing an earlier one, and copies that file. If the conversion on disk already holds identical bytes, it isn't rewritten, so its timestamps stay put and the SSD isn't written to.
    - **Re-copy of an older capture** (e.g. from CleanShot's history): converts on the clipboard only. It reuses an up-to-date conversion on disk if there is one; otherwise the clipboard gets just the image data and nothing is written.
 
 The agent uses no measurable CPU while idle and about 50 MB of memory (mostly AppKit, for the toast).
