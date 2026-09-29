@@ -1,10 +1,11 @@
-/// Watches CleanShot X's export folder for new WebP screenshots. When the clipboard points at the new file,
-/// saves the smaller of a PNG/JPEG re-encode next to it and puts that copy on the clipboard instead.
-/// Follows CleanShot's folder, format, and filename settings live.
+/// Watches the clipboard for WebP screenshots copied by CleanShot X (new captures, Annotate edits, history re-copies)
+/// and swaps them for the smaller of a PNG/JPEG re-encode. Fresh captures and edits also get that copy saved next
+/// to the WebP. Follows CleanShot's folder, format, filename, and overlay settings live.
 import AppKit
 import CleanShotWebPCore
 
 let jpegQuality = 0.85
+let clipboardPollInterval: TimeInterval = 0.25
 let workQueue = DispatchQueue(label: "cleanshot-webp-converter")
 
 func log(_ message: String) {
@@ -12,30 +13,33 @@ func log(_ message: String) {
     fflush(stdout)
 }
 
-/// Last handled version per path. FSEvents reports several events per save, and this collapses them.
-/// Only touched on `workQueue`.
-nonisolated(unsafe) var handledVersions: [String: FileVersion] = [:]
-
-/// Runs the conversion pipeline for one file, logs the outcome, and shows a toast next to CleanShot's overlay.
-/// Runs on `workQueue`.
-func handle(_ url: URL, isOverlayOnLeftEdge: Bool) {
+/// Runs the conversion for one clipboard copy, logs the outcome, and shows a toast. Runs on `workQueue`.
+func handle(_ url: URL, changeCount: Int, settings: CleanShotSettings) {
     let name = url.lastPathComponent
-    guard let version = FileVersion(of: url), handledVersions[url.path] != version else { return }
-    defer { handledVersions[url.path] = FileVersion(of: url) }
     do {
-        let (result, candidates) = try processScreenshot(at: url, pasteboard: .general, jpegQuality: jpegQuality)
+        let (result, candidates) = try processClipboardCopy(
+            of: url, pasteboard: .general, changeCount: changeCount, exportDirectory: settings.exportDirectory, jpegQuality: jpegQuality
+        )
         let sizes = candidates.map { "\($0.fileExtension)=\($0.data.count)B" }.joined(separator: ", ")
+        let isRecopy: Bool
         switch result {
-        case .notRecent: break
-        case .notOnClipboard: log("\(name): not on clipboard, skipping")
-        case .encodingFailed: log("\(name): encoding failed")
-        case .savedOnly(let output): log("\(name): \(sizes) -> \(output.lastPathComponent) (clipboard changed, left alone)")
+        case .fileMissing: return log("\(name): file never appeared, skipping")
+        case .clipboardChanged: return log("\(name): clipboard changed meanwhile, left alone")
+        case .encodingFailed: return log("\(name): encoding failed")
         case .savedAndCopied(let output):
-            log("\(name): \(sizes) -> \(output.lastPathComponent), copied")
-            let sourceSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-            let summary = conversionSummary(sourceName: name, sourceSize: sourceSize, result: candidates[0])
-            Task { @MainActor in showToast(summary, isLeftEdge: isOverlayOnLeftEdge) }
+            log("\(name): \(sizes) -> \(output.lastPathComponent), saved and copied")
+            isRecopy = false
+        case .copiedExisting(let output):
+            log("\(name): re-copied, swapped clipboard to existing \(output.lastPathComponent)")
+            isRecopy = true
+        case .copiedDataOnly:
+            log("\(name): re-copied, \(sizes) -> \(candidates[0].fileExtension) on clipboard only")
+            isRecopy = true
         }
+        let sourceSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        let summary = conversionSummary(sourceName: name, sourceSize: sourceSize, result: candidates[0], isRecopy: isRecopy)
+        let isLeftEdge = settings.isOverlayOnLeftEdge
+        Task { @MainActor in showToast(summary, isLeftEdge: isLeftEdge) }
     } catch {
         log("\(name): \(error.localizedDescription)")
     }
@@ -63,86 +67,48 @@ final class DefaultsObserver: NSObject {
     }
 }
 
-/// Delivers file-level FSEvents (creations, in-place edits, renames) under one directory to a closure on the main queue.
-final class FileEventStream {
-    private var stream: FSEventStreamRef?
-    private let onEvent: (String) -> Void
-
-    init?(directory: URL, onEvent: @escaping (String) -> Void) {
-        self.onEvent = onEvent
-        var context = FSEventStreamContext(
-            version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil
-        )
-        let callback: FSEventStreamCallback = { _, info, count, paths, flags, _ in
-            let events = Unmanaged<FileEventStream>.fromOpaque(info!).takeUnretainedValue()
-            let paths = unsafeBitCast(paths, to: NSArray.self) as! [String]
-            for index in 0..<count where flags[index] & FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsFile) != 0 {
-                events.onEvent(paths[index])
-            }
-        }
-        let flags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagNoDefer
-        guard let stream = FSEventStreamCreate(
-            nil, callback, &context, [directory.path] as CFArray,
-            FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.1, FSEventStreamCreateFlags(flags)
-        ) else { return nil }
-        self.stream = stream
-        FSEventStreamSetDispatchQueue(stream, .main)
-        FSEventStreamStart(stream)
-    }
-
-    deinit {
-        guard let stream else { return }
-        FSEventStreamStop(stream)
-        FSEventStreamInvalidate(stream)
-        FSEventStreamRelease(stream)
-    }
-}
-
-/// Owns the folder watch and re-points it whenever CleanShot's settings change.
+/// Polls the clipboard's change count (macOS has no clipboard notification) and dispatches CleanShot WebP copies.
+/// Our own replacements point at a PNG/JPEG or carry no file, so they never re-trigger.
 @MainActor
-final class ExportFolderWatcher {
+final class ClipboardWatcher {
     private var settings: CleanShotSettings?
-    private var events: FileEventStream?
+    private var lastChangeCount = NSPasteboard.general.changeCount
+    private var timer: Timer?
+
+    func start() {
+        timer = Timer.scheduledTimer(withTimeInterval: clipboardPollInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.check() }
+        }
+    }
 
     func apply(_ newSettings: CleanShotSettings) {
         guard newSettings != settings else { return }
-        let isNewDirectory = newSettings.exportDirectory != settings?.exportDirectory
         settings = newSettings
         log("CleanShot saves \(newSettings.screenshotFormat) to \(newSettings.exportDirectory.path), name template \(newSettings.nameTemplate.joined())")
         if !newSettings.savesWebP { log("not WebP, idling until CleanShot switches to WebP") }
-        if isNewDirectory { watch(newSettings.exportDirectory) }
     }
 
-    private func watch(_ directory: URL) {
-        events = FileEventStream(directory: directory) { [weak self] path in
-            MainActor.assumeIsolated { self?.fileChanged(path) }
-        }
-        if events == nil { log("cannot watch \(directory.path)") }
-    }
-
-    private func fileChanged(_ path: String) {
-        guard let settings, settings.savesWebP else { return }
-        let changedURL = URL(fileURLWithPath: path)
-        // FSEvents reports real paths (e.g. /private/tmp), CleanShot's setting may use a symlinked one.
-        guard changedURL.pathExtension.lowercased() == "webp",
-              changedURL.deletingLastPathComponent().resolvingSymlinksInPath() == settings.exportDirectory.resolvingSymlinksInPath(),
-              settings.matchesName(changedURL.lastPathComponent)
-        else { return }
-        // Use CleanShot's spelling of the folder, since that's what it puts on the clipboard.
-        let url = settings.exportDirectory.appendingPathComponent(changedURL.lastPathComponent)
-        let isOverlayOnLeftEdge = settings.isOverlayOnLeftEdge
-        workQueue.async { handle(url, isOverlayOnLeftEdge: isOverlayOnLeftEdge) }
+    private func check() {
+        let pasteboard = NSPasteboard.general
+        let changeCount = pasteboard.changeCount
+        guard changeCount != lastChangeCount else { return }
+        lastChangeCount = changeCount
+        guard let settings, settings.savesWebP, let path = fileURLPath(on: pasteboard) else { return }
+        let url = URL(fileURLWithPath: path)
+        guard isCleanShotWebP(url, settings: settings) else { return }
+        workQueue.async { handle(url, changeCount: changeCount, settings: settings) }
     }
 }
 
 let defaults = cleanShotDefaults()
-let watcher = ExportFolderWatcher()
+let watcher = ClipboardWatcher()
 watcher.apply(CleanShotSettings(defaults: defaults))
+watcher.start()
 let observer = DefaultsObserver(defaults: defaults, keys: CleanShotKey.all) {
     Task { @MainActor in watcher.apply(CleanShotSettings(defaults: defaults)) }
 }
 
-// An app run loop (not dispatchMain) is required for cross-process preference notifications and the toast.
+// An app run loop (not dispatchMain) is required for cross-process preference notifications, the timer, and the toast.
 // Accessory apps can show windows without a Dock icon.
 NSApplication.shared.setActivationPolicy(.accessory)
 NSApplication.shared.run()
