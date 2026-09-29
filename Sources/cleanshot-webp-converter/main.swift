@@ -12,8 +12,8 @@ func log(_ message: String) {
     fflush(stdout)
 }
 
-/// Runs the conversion pipeline for one file and logs the outcome.
-func handle(_ url: URL) {
+/// Runs the conversion pipeline for one file, logs the outcome, and shows a toast next to CleanShot's overlay.
+func handle(_ url: URL, isOverlayOnLeftEdge: Bool) {
     let name = url.lastPathComponent
     do {
         let (result, candidates) = try processScreenshot(at: url, pasteboard: .general, jpegQuality: jpegQuality)
@@ -27,7 +27,7 @@ func handle(_ url: URL) {
             log("\(name): \(sizes) -> \(output.lastPathComponent), copied")
             let sourceSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
             let summary = conversionSummary(sourceName: name, sourceSize: sourceSize, result: candidates[0])
-            Task { @MainActor in showToast(summary) }
+            Task { @MainActor in showToast(summary, isLeftEdge: isOverlayOnLeftEdge) }
         }
     } catch {
         log("\(name): \(error.localizedDescription)")
@@ -97,7 +97,8 @@ final class ExportFolderWatcher {
         guard settings.savesWebP else { return }
         for name in newNames where settings.matchesName(name) {
             let url = settings.exportDirectory.appendingPathComponent(name)
-            workQueue.async { handle(url) }
+            let isOverlayOnLeftEdge = settings.isOverlayOnLeftEdge
+            workQueue.async { handle(url, isOverlayOnLeftEdge: isOverlayOnLeftEdge) }
         }
     }
 

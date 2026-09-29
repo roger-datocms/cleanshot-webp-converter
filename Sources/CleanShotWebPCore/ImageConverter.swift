@@ -11,10 +11,11 @@ public struct EncodedImage: Sendable {
     public var formatName: String { type == .jpeg ? "JPEG" : fileExtension.uppercased() }
 }
 
-/// One-line summary for the toast, e.g. "Converted shot.webp (142 KB) to JPEG (51 KB)".
+/// Two-line summary for the toast, e.g. "Converted shot.webp (142 KB)\nto JPEG (51 KB)".
+/// Sizes use non-breaking spaces so wrapping never splits "142 KB".
 public func conversionSummary(sourceName: String, sourceSize: Int, result: EncodedImage) -> String {
-    let format = { (bytes: Int) in ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file) }
-    return "Converted \(sourceName) (\(format(sourceSize))) to \(result.formatName) (\(format(result.data.count)))"
+    let format = { (bytes: Int) in ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file).replacingOccurrences(of: " ", with: "\u{00A0}") }
+    return "Converted \(sourceName)\u{00A0}(\(format(sourceSize)))\nto \(result.formatName) (\(format(result.data.count)))"
 }
 
 /// Re-encodes the first image of `source`, keeping its metadata (notably the Retina DPI).

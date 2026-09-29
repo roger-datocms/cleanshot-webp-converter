@@ -5,7 +5,7 @@
 1. Re-encodes each capture as PNG and as JPEG (quality 85).
 2. Saves the smaller one next to the original. The WebP stays.
 3. Replaces the clipboard with the new file, so pasting works everywhere.
-4. Shows a small toast at the top of the screen for 3 seconds, e.g. "Converted 2026-09-28 5-12-29 PM.webp (142 KB) to JPEG (51 KB)".
+4. Shows a small toast for 3 seconds next to CleanShot's Quick Access Overlay (or in its corner when the overlay is off), e.g. "Converted 2026-09-28 5-12-29 PM.webp (142 KB) to JPEG (51 KB)".
 
 Photos and gradients usually end up as JPEG, UI and text as PNG. Captures with transparency (e.g. window shadows) always become PNG, because JPEG can't hold an alpha channel.
 
