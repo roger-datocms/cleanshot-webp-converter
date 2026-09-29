@@ -7,7 +7,6 @@ import CleanShotWebPCore
 let jpegQuality = 0.85
 let workQueue = DispatchQueue(label: "cleanshot-webp-converter")
 
-
 func log(_ message: String) {
     print("\(Date().formatted(.iso8601)) \(message)")
     fflush(stdout)
@@ -24,7 +23,11 @@ func handle(_ url: URL) {
         case .notOnClipboard: log("\(name): not on clipboard, skipping")
         case .encodingFailed: log("\(name): encoding failed")
         case .savedOnly(let output): log("\(name): \(sizes) -> \(output.lastPathComponent) (clipboard changed, left alone)")
-        case .savedAndCopied(let output): log("\(name): \(sizes) -> \(output.lastPathComponent), copied")
+        case .savedAndCopied(let output):
+            log("\(name): \(sizes) -> \(output.lastPathComponent), copied")
+            let sourceSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+            let summary = conversionSummary(sourceName: name, sourceSize: sourceSize, result: candidates[0])
+            Task { @MainActor in showToast(summary) }
         }
     } catch {
         log("\(name): \(error.localizedDescription)")
@@ -111,5 +114,7 @@ let observer = DefaultsObserver(defaults: defaults, keys: CleanShotKey.all) {
     Task { @MainActor in watcher.apply(CleanShotSettings(defaults: defaults)) }
 }
 
-// A run loop (not dispatchMain) is required for cross-process preference change notifications.
-RunLoop.main.run()
+// An app run loop (not dispatchMain) is required for cross-process preference notifications and the toast.
+// Accessory apps can show windows without a Dock icon.
+NSApplication.shared.setActivationPolicy(.accessory)
+NSApplication.shared.run()

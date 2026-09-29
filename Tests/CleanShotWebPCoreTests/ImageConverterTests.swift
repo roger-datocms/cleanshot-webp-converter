@@ -54,6 +54,13 @@ func makeImageSource(hasAlpha: Bool, dpi: Double = 72) -> CGImageSource {
         }
     }
 
+    @Test func summarizesConversion() {
+        let jpeg = EncodedImage(type: .jpeg, data: Data(count: 51_217))
+        let png = EncodedImage(type: .png, data: Data(count: 181_297))
+        #expect(conversionSummary(sourceName: "shot.webp", sourceSize: 142_062, result: jpeg) == "Converted shot.webp (142 KB) to JPEG (51 KB)")
+        #expect(conversionSummary(sourceName: "shot.webp", sourceSize: 142_062, result: png) == "Converted shot.webp (142 KB) to PNG (181 KB)")
+    }
+
     @Test func unreadableFileYieldsNoCandidates() {
         #expect(encodeSmallestFirst(URL(fileURLWithPath: "/nonexistent.webp")).isEmpty)
     }
