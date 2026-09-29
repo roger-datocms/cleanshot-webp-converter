@@ -1,10 +1,10 @@
 # cleanshot-webp-converter
 
-[CleanShot X](https://cleanshot.com) can save screenshots as WebP, which is small but not accepted everywhere (some GitHub editors, for example). This tiny macOS agent watches for CleanShot copying a WebP capture to the clipboard (new captures, Annotate edits, and re-copies from CleanShot's history) and:
+[CleanShot X](https://cleanshot.com) can save screenshots as WebP, which is small but not accepted everywhere (some GitHub editors, for example). This tiny macOS agent watches for CleanShot saving or copying a WebP capture (new captures, Annotate edits, and re-copies from CleanShot's history) and:
 
 1. Re-encodes each capture as PNG and as JPEG (quality 85).
 2. For fresh captures and edits, saves the smaller one next to the original. The WebP stays.
-3. Replaces the clipboard with the new file, so pasting works everywhere.
+3. If CleanShot copied it, replaces the clipboard with the new file, so pasting works everywhere.
 4. Shows a small toast for 3 seconds next to CleanShot's Quick Access Overlay (or in its corner when the overlay is off), e.g. "Converted 2026-09-28 5-12-29 PM.webp (142 KB) to JPEG (51 KB)".
 
 Photos and gradients usually end up as JPEG, UI and text as PNG. Captures with transparency (e.g. window shadows) always become PNG, because JPEG can't hold an alpha channel.
@@ -15,7 +15,7 @@ Photos and gradients usually end up as JPEG, UI and text as PNG. Captures with t
 - Xcode or the Command Line Tools (`xcode-select --install`).
 - CleanShot X (direct or Setapp) set to:
   1. **Settings → General → File format: WebP**.
-  2. **After capture: Save** and **Copy file to clipboard** both on.
+  2. **After capture: Save** and/or **Copy file to clipboard** on. With only Save, you get the converted file; with Copy, the clipboard is converted too.
 
 ## Install
 
@@ -36,9 +36,13 @@ Logs: `tail -f ~/Library/Logs/cleanshot-webp-converter.log`
 CleanShot has no plugin or post-capture hook API; its [URL scheme](https://cleanshot.com/docs-api) only triggers captures. So the agent:
 
 1. Reads CleanShot's export folder, file format, filename template, and overlay edge from its preferences, and re-reads them whenever you change them in CleanShot.
-2. Checks the clipboard's change counter 4 times a second (macOS has no clipboard notification). It reads the clipboard only when it holds a file link, never text.
+2. Watches both ways CleanShot hands over a capture:
+   - **Clipboard:** checks its change counter 4 times a second (macOS has no clipboard notification). It reads the clipboard only when it holds a file link, never text.
+   - **Export folder:** FSEvents reports saves. A save that CleanShot doesn't also copy within 1.5 seconds gets its conversion saved, and the clipboard is left alone.
+
+   Both share a record of converted file versions, so a capture that's saved and copied converts once.
 3. Acts only on a `.webp` in CleanShot's export folder or its history storage (`~/Library/Application Support/CleanShot/media`) whose name matches the filename template. The clipboard doesn't record which app copied a file, so location and name identify CleanShot's files. A WebP you download elsewhere stays untouched.
-4. Picks what to do by how recently the WebP was saved:
+4. For a copied WebP, picks what to do by how recently it was saved:
    - **Fresh capture or Annotate edit** (saved in the last 30 seconds): saves the conversion next to it, replacing an earlier one, and copies that file.
    - **Re-copy of an older capture** (e.g. from CleanShot's history): converts on the clipboard only. It reuses an up-to-date conversion on disk if there is one; otherwise the clipboard gets just the image data and nothing is written.
 

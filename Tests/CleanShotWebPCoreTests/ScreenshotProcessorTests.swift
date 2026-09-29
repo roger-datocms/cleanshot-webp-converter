@@ -210,3 +210,60 @@ struct Sandbox: ~Copyable {
         #expect(isCleanShotWebP(URL(fileURLWithPath: path), settings: settings, mediaDirectory: media) == isCleanShot)
     }
 }
+
+/// CleanShot's "Save" and "Copy" after-capture actions are independent; these cover a save without a copy.
+@Suite struct SavedFileTests {
+    func processSaved(_ sandbox: borrowing Sandbox, _ url: URL, converted: FileVersion? = nil) throws -> (result: ProcessingResult, candidates: [EncodedImage], version: FileVersion?) {
+        var timing = sandbox.timing
+        timing.copyGrace = 0.2
+        return try processSavedFile(at: url, pasteboard: sandbox.pasteboard, converted: converted, timing: timing)
+    }
+
+    @Test func saveWithoutCopySavesConversionAndLeavesClipboard() throws {
+        let sandbox = try Sandbox()
+        sandbox.pasteboard.clearContents()
+        sandbox.pasteboard.setString("unrelated", forType: .string)
+        let webp = try sandbox.capture("photo")
+
+        let (result, _, version) = try processSaved(sandbox, webp)
+
+        #expect(result == .savedOnly(webp.deletingPathExtension().appendingPathExtension("jpg")))
+        #expect(version == FileVersion(of: webp))
+        #expect(sandbox.pasteboard.string(forType: .string) == "unrelated")
+    }
+
+    @Test func saveWithCopyIsLeftToTheClipboardTrigger() throws {
+        let sandbox = try Sandbox()
+        let webp = try sandbox.capture("photo")
+        sandbox.copyToClipboard(webp)
+
+        let (result, _, _) = try processSaved(sandbox, webp)
+
+        #expect(result == .leftToClipboard)
+        #expect(try sandbox.files() == [webp.lastPathComponent])
+    }
+
+    @Test func skipsVersionTheClipboardTriggerConverted() throws {
+        let sandbox = try Sandbox()
+        let webp = try sandbox.capture("photo")
+        let (result, _, _) = try processSaved(sandbox, webp, converted: FileVersion(of: webp))
+        #expect(result == .alreadyConverted)
+    }
+
+    @Test func ignoresFilesNotSavedRecently() throws {
+        let sandbox = try Sandbox()
+        let webp = try sandbox.capture("photo")
+        try sandbox.age(webp)
+        let (result, _, _) = try processSaved(sandbox, webp)
+        #expect(result == .notFresh)
+    }
+
+    @Test func fileVersionChangesWhenEdited() throws {
+        let sandbox = try Sandbox()
+        let webp = try sandbox.capture("photo")
+        let original = try #require(FileVersion(of: webp))
+        try Data(contentsOf: fixtureURL("graphic")).write(to: webp)
+        #expect(FileVersion(of: webp) != original)
+        #expect(FileVersion(of: sandbox.exportDirectory.appendingPathComponent("missing.webp")) == nil)
+    }
+}
