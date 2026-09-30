@@ -28,7 +28,12 @@ The script builds a release binary, copies it to `~/.local/bin`, and starts it a
 
 To update, pull and run `./install.sh` again. To remove everything, run `./install.sh uninstall`.
 
-Logs: `tail -f ~/Library/Logs/cleanshot-webp-converter.log`
+Logs go to macOS unified logging, which caps and prunes them automatically. Use the full `/usr/bin/log` path, because zsh has its own `log` builtin:
+
+```sh
+/usr/bin/log stream --style compact --predicate 'subsystem == "local.cleanshot-webp-converter"'         # live
+/usr/bin/log show --last 1d --style compact --predicate 'subsystem == "local.cleanshot-webp-converter"'  # past day
+```
 
 ## How it works
 

@@ -4,14 +4,18 @@
 /// Follows CleanShot's folder, format, and filename settings live.
 import AppKit
 import CleanShotWebPCore
+import os
 
 let jpegQuality = 0.85
 let clipboardPollInterval: TimeInterval = 0.25
 let workQueue = DispatchQueue(label: "cleanshot-webp-converter")
 
+/// Unified logging: macOS caps and prunes it automatically, so no log file grows forever.
+let logger = Logger(subsystem: "local.cleanshot-webp-converter", category: "converter")
+
+/// Logs at `.notice`, the lowest level macOS persists. Marked public so file names aren't redacted as `<private>`.
 func log(_ message: String) {
-    print("\(Date().formatted(.iso8601)) \(message)")
-    fflush(stdout)
+    logger.notice("\(message, privacy: .public)")
 }
 
 /// Versions converted per path, shared by both triggers so a capture that's saved and copied converts once.

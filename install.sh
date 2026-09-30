@@ -7,13 +7,14 @@ NAME=cleanshot-webp-converter
 LABEL=local.$NAME
 PLIST=~/Library/LaunchAgents/$LABEL.plist
 BINARY=~/.local/bin/$NAME
-LOG=~/Library/Logs/$NAME.log
+LEGACY_LOG=~/Library/Logs/$NAME.log
+LOGS="/usr/bin/log stream --style compact --predicate 'subsystem == \"$LABEL\"'"
 DOMAIN=gui/$(id -u)
 
 launchctl bootout $DOMAIN/$LABEL 2>/dev/null || true
 
 if [[ ${1:-} == uninstall ]]; then
-  rm -f $PLIST $BINARY $LOG
+  rm -f $PLIST $BINARY $LEGACY_LOG
   echo "Uninstalled."
   exit 0
 fi
@@ -33,13 +34,12 @@ cat > $PLIST <<EOF
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Interactive</string>
-  <key>StandardOutPath</key><string>$LOG</string>
-  <key>StandardErrorPath</key><string>$LOG</string>
 </dict>
 </plist>
 EOF
 
 launchctl bootstrap $DOMAIN $PLIST
 sleep 1
-echo "Installed. Logs: $LOG"
-tail -n 3 $LOG
+# Earlier versions logged to a file; unified logging replaced it.
+rm -f $LEGACY_LOG
+echo "Installed. Live logs: $LOGS"
