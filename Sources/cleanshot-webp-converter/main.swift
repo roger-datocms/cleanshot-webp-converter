@@ -1,7 +1,7 @@
 /// Converts CleanShot X's WebP screenshots to the smaller of PNG/JPEG, however CleanShot hands them over:
 /// - Copied (new captures, Annotate edits, history re-copies): swaps the clipboard, and saves fresh ones next to the WebP.
 /// - Saved but not copied: saves the conversion next to the WebP.
-/// Follows CleanShot's folder, format, filename, and overlay settings live.
+/// Follows CleanShot's folder, format, and filename settings live.
 import AppKit
 import CleanShotWebPCore
 
@@ -18,15 +18,7 @@ func log(_ message: String) {
 /// Only touched on `workQueue`.
 nonisolated(unsafe) var convertedVersions: [String: FileVersion] = [:]
 
-/// Shows the toast for a finished conversion.
-func announce(_ url: URL, result: EncodedImage, isRecopy: Bool, settings: CleanShotSettings) {
-    let sourceSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-    let summary = conversionSummary(sourceName: url.lastPathComponent, sourceSize: sourceSize, result: result, isRecopy: isRecopy)
-    let isLeftEdge = settings.isOverlayOnLeftEdge
-    Task { @MainActor in showToast(summary, isLeftEdge: isLeftEdge) }
-}
-
-/// Runs the conversion for one clipboard copy, logs the outcome, and shows a toast. Runs on `workQueue`.
+/// Runs the conversion for one clipboard copy, and logs the outcome. Runs on `workQueue`.
 func handleClipboardCopy(_ url: URL, changeCount: Int, settings: CleanShotSettings) {
     let name = url.lastPathComponent
     do {
@@ -34,7 +26,6 @@ func handleClipboardCopy(_ url: URL, changeCount: Int, settings: CleanShotSettin
             of: url, pasteboard: .general, changeCount: changeCount, exportDirectory: settings.exportDirectory, jpegQuality: jpegQuality
         )
         let sizes = candidates.map { "\($0.fileExtension)=\($0.data.count)B" }.joined(separator: ", ")
-        let isRecopy: Bool
         switch result {
         case .fileMissing: return log("\(name): file never appeared, skipping")
         case .clipboardChanged: return log("\(name): clipboard changed meanwhile, left alone")
@@ -42,16 +33,12 @@ func handleClipboardCopy(_ url: URL, changeCount: Int, settings: CleanShotSettin
         case .savedAndCopied(let output):
             log("\(name): \(sizes) -> \(output.lastPathComponent) on disk, copied")
             convertedVersions[url.path] = FileVersion(of: url)
-            isRecopy = false
         case .copiedExisting(let output):
             log("\(name): re-copied, swapped clipboard to existing \(output.lastPathComponent)")
-            isRecopy = true
         case .copiedDataOnly:
             log("\(name): re-copied, \(sizes) -> \(candidates[0].fileExtension) on clipboard only")
-            isRecopy = true
         case .savedOnly, .leftToClipboard, .alreadyConverted, .notFresh: return
         }
-        announce(url, result: candidates[0], isRecopy: isRecopy, settings: settings)
     } catch {
         log("\(name): \(error.localizedDescription)")
     }
@@ -67,7 +54,6 @@ func handleSavedFile(_ url: URL, settings: CleanShotSettings) {
         guard case .savedOnly(let output) = result else { return }
         convertedVersions[url.path] = version
         log("\(name): \(candidates.map { "\($0.fileExtension)=\($0.data.count)B" }.joined(separator: ", ")) -> \(output.lastPathComponent) on disk (not copied)")
-        announce(url, result: candidates[0], isRecopy: false, settings: settings)
     } catch {
         log("\(name): \(error.localizedDescription)")
     }
@@ -195,7 +181,5 @@ let observer = DefaultsObserver(defaults: defaults, keys: CleanShotKey.all) {
     Task { @MainActor in watcher.apply(CleanShotSettings(defaults: defaults)) }
 }
 
-// An app run loop (not dispatchMain) is required for cross-process preference notifications, the timer, and the toast.
-// Accessory apps can show windows without a Dock icon.
-NSApplication.shared.setActivationPolicy(.accessory)
-NSApplication.shared.run()
+// A run loop (not dispatchMain) is required for cross-process preference notifications and the clipboard timer.
+RunLoop.main.run()

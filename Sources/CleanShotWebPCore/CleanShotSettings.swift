@@ -8,34 +8,29 @@ public enum CleanShotKey {
     public static let exportPath = "exportPath"
     public static let screenshotFormat = "screenshotFormat"
     public static let nameTemplate = "mediaNameTemplate"
-    public static let overlayOnLeftEdge = "popupOnLeftEdge"
-    public static let all = [exportPath, screenshotFormat, nameTemplate, overlayOnLeftEdge]
+    public static let all = [exportPath, screenshotFormat, nameTemplate]
 }
 
-/// The subset of CleanShot's preferences that decides where screenshots land, what they're called,
-/// and which screen edge its Quick Access Overlay uses.
+/// The subset of CleanShot's preferences that decides where screenshots land and what they're called.
 public struct CleanShotSettings: Equatable, Sendable {
     public var exportDirectory: URL
     public var screenshotFormat: String
     /// Tokens such as `["%y", "-", "%m"]`; empty when CleanShot hasn't stored one.
     public var nameTemplate: [String]
-    public var isOverlayOnLeftEdge: Bool
 
-    public init(exportDirectory: URL, screenshotFormat: String, nameTemplate: [String], isOverlayOnLeftEdge: Bool = false) {
+    public init(exportDirectory: URL, screenshotFormat: String, nameTemplate: [String]) {
         self.exportDirectory = exportDirectory.standardizedFileURL
         self.screenshotFormat = screenshotFormat
         self.nameTemplate = nameTemplate
-        self.isOverlayOnLeftEdge = isOverlayOnLeftEdge
     }
 
-    /// Reads settings from `defaults`, falling back to CleanShot's factory defaults (Desktop, PNG, overlay on the right).
+    /// Reads settings from `defaults`, falling back to CleanShot's factory defaults (Desktop, PNG).
     public init(defaults: UserDefaults) {
         let path = defaults.string(forKey: CleanShotKey.exportPath) ?? "~/Desktop"
         self.init(
             exportDirectory: URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true),
             screenshotFormat: defaults.string(forKey: CleanShotKey.screenshotFormat) ?? "png",
-            nameTemplate: defaults.stringArray(forKey: CleanShotKey.nameTemplate) ?? [],
-            isOverlayOnLeftEdge: defaults.bool(forKey: CleanShotKey.overlayOnLeftEdge)
+            nameTemplate: defaults.stringArray(forKey: CleanShotKey.nameTemplate) ?? []
         )
     }
 

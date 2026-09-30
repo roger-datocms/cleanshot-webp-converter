@@ -8,15 +8,6 @@ public struct EncodedImage: Sendable {
     public let data: Data
 
     public var fileExtension: String { type == .jpeg ? "jpg" : type.preferredFilenameExtension ?? "img" }
-    public var formatName: String { type == .jpeg ? "JPEG" : fileExtension.uppercased() }
-}
-
-/// Two-line summary for the toast, e.g. "Converted shot.webp (142 KB)\nto JPEG (51 KB)".
-/// A re-copy from CleanShot's history reads "Copied shot.webp (142 KB)\nas JPEG (51 KB)".
-/// Sizes use non-breaking spaces so wrapping never splits "142 KB".
-public func conversionSummary(sourceName: String, sourceSize: Int, result: EncodedImage, isRecopy: Bool = false) -> String {
-    let format = { (bytes: Int) in ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file).replacingOccurrences(of: " ", with: "\u{00A0}") }
-    return "\(isRecopy ? "Copied" : "Converted") \(sourceName)\u{00A0}(\(format(sourceSize)))\n\(isRecopy ? "as" : "to") \(result.formatName) (\(format(result.data.count)))"
 }
 
 /// Re-encodes the first image of `source`, keeping its metadata (notably the Retina DPI).
